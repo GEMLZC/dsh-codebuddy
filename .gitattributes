@@ -1,0 +1,7 @@
+# 统一行尾，避免 Windows 上 clone 后整个仓库被判成「全文件改动」
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.svg text
