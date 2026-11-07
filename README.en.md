@@ -179,6 +179,42 @@ Rules that are easy to get wrong:
   Selecting Off downgrades to the lowest tier (`low`) instead of omitting the field.
 - Models not listed fall back conservatively (High / Max) rather than losing all efforts.
 
+#### Composer effort slider (v1.1.7)
+
+A slider now sits in the composer toolbar, immediately **left of the model picker**, so
+changing the effort no longer needs the two-level popup.
+
+It agrees with the popup by construction, because there is exactly one source of truth:
+
+- Registered on the host's public slot `conversation.input.right` (`order: -100`, the
+  immediate left neighbour of the model seat). It reads no hashed CSS-module class names
+  and mutates no host DOM.
+- Efforts and the current value come from `ctx.modelDirectories`' per-session
+  `ModelDirectory` — the **same store** `ModelSelect` in `dsh-client-ui-model-selection`
+  reads, and the same `directory.select()` it calls.
+
+That yields three properties:
+
+| Property | Why |
+|---|---|
+| Default effort is unchanged | Both sides evaluate `current.reasoningEffort ?? reasoning.defaultEffort`, and `defaultEffort` still comes from `defaultEffortFor()` above |
+| Drag → popup follows | The drag writes the same store the popup re-renders from |
+| Popup change → slider follows | The reverse of the same chain |
+
+**Works for every provider**: the slot is public and the directory is shared across
+providers, so official DeepSeek-account models (e.g. `deepseek-flash` with
+off/low/high/max) are draggable too — not just CodeBuddy routes.
+
+**Request timing**: `input` is visual-only; `change` (pointer release or keyboard
+commit) submits once — one drag equals one `selectModel`. On failure the thumb snaps back
+to the host's value and the reason lives in `title`; no toast, because a toast steals
+input focus.
+
+**When it does not appear**: the model declares no `reasoning.efforts`, there is no
+current model yet, the session is an addressed subagent, or the model exposes a single
+effort (then only a static label is drawn, never a fake slider). Narrow widths
+(`≤ 560px`, the host's own breakpoint) drop the text label and keep the slider.
+
 ---
 
 ## Data and privacy
@@ -260,7 +296,7 @@ CI: every push and pull request runs the full suite (`.github/workflows/ci.yml`)
 **Why this works in CI**: `lib/index.js` imports `@deepseek-ai/dsh-llm`, and that package **is published to npm** — CI installs it directly instead of a whole DSH installation:
 
 ```bash
-npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2   # ⚠️ pin the version: this package's dist-tag `latest` is a stale 0.0.1-rc.1
+npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2 @deepseek-ai/cordis@4.0.5   # ⚠️ pin both: dsh-llm's `latest` dist-tag is a stale 0.0.1-rc.1
 node --test "test/*.test.mjs"
 ```
 
@@ -268,9 +304,23 @@ node --test "test/*.test.mjs"
 > **files/globs** as test entries. A bare directory name is treated as a CJS entry module, which fails
 > with `MODULE_NOT_FOUND` and is counted as one failing test.
 
-Coverage: SSE parsing edge cases (CRLF split across chunks, multi-line `data:`, trailing frame), block lifecycle and index allocation, tool-call argument assembly, mutually-exclusive `usage` accounting, error classification (11102 / 11115 / 14018 / 401 / 5xx), stream-truncation guard, **stream idle timeout**, catalog merging (add / remove / scope), probe breaker and overall deadline, **dual-copy model manifest consistency**, plus an end-to-end run against a **local mock gateway**.
+Coverage: SSE parsing edge cases (CRLF split across chunks, multi-line `data:`, trailing frame), block lifecycle and index allocation, tool-call argument assembly, mutually-exclusive `usage` accounting, error classification (11102 / 11115 / 14018 / 401 / 5xx), stream-truncation guard, **stream idle timeout**, catalog merging (add / remove / scope), probe breaker and overall deadline, **dual-copy model manifest consistency**, **the composer effort slider's default tier and tier sequence** (`test/slider.test.mjs`, pure functions, no DOM), **its breathing-glow windows and drag continuity** (`test/render-effort.test.mjs`, renders the real component through mini-hooks), **a real-cordis replay** (`test/cordis-replay.test.mjs`), plus an end-to-end run against a **local mock gateway**.
+
+> `test/cordis-replay.test.mjs` mounts `lib/client.js` on a **real cordis** to guard a failure class
+> that only real fibers expose: when `ctx.inject([...])` omits a service name, cordis **throws** instead
+> of returning `undefined`, and the `try/catch` inside an `inject` callback turns that into
+> "the slot exists, the component renders `null`, nothing shows up, the console may have one line" —
+> which is exactly how v1.1.7's slider disappeared. It resolves cordis via bare specifier →
+> `DSH_CORDIS_PATH` → `~/.dsh/profiles/*`, and **skips** (never fails) when none resolve, or when the
+> cordis build lacks `Service.associate` semantics.
 
 > When developing locally, run tests inside an **installed copy** — the `@deepseek-ai/dsh-llm` that `lib/index.js` resolves comes from the DSH profile. Sync `lib/` and `test/` into `<profile>/node_modules/dsh-codebuddy/` first. (CI does not need this step, since it installs the dependency from npm.)
+>
+> `test/slider.test.mjs`, `test/render-effort.test.mjs` and `test/cordis-replay.test.mjs` never import `lib/index.js`, so they also run straight from the repo. Point the replay test at the cordis shipped with DSH:
+>
+> ```bash
+> DSH_CORDIS_PATH="<dsh app>/node_modules/@deepseek-ai/cordis/lib/index.js" node --test test/cordis-replay.test.mjs
+> ```
 
 ---
 

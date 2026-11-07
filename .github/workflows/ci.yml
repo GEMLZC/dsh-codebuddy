@@ -26,6 +26,16 @@
 #    只是从来没有生成过），npm ci 会直接报错退出。
 #    同理 setup-node **不能**开 `cache: npm` —— 它在装依赖之前先找锁文件，找不到就失败。
 #
+# ── 为什么还要装 @deepseek-ai/cordis ──────────────────────────────
+# test/cordis-replay.test.mjs 把 lib/client.js 挂到**真 cordis** 上跑，用来守
+# 「inject 少声明一个服务名 → 槽位静默不渲染」这类只能靠真 fiber 才暴露的故障
+# （v1.1.7 的拖动条就是这么整条不见的）。cordis 同样发布在公共 npm 上，
+# 4.0.5 与 DSH app 内置的那份同代，所以 CI 里能真跑，不用跳过。
+#
+# 该测试自带两道兜底，任何一条不成立都只是 **skip**、不会把 CI 弄红：
+#   ① 解析不到 @deepseek-ai/cordis（裸包名 / DSH_CORDIS_PATH / profile 三路都空）；
+#   ② 这份 cordis 没有 Service.associate 语义（版本差异），回放模型不适用。
+#
 # ── 测试为什么在 CI 里是安全的 ────────────────────────────────────
 # test/ 下全部用 stub（伪造 fetch / resp.body.getReader）驱动，不连真实网关：
 # 不花额度、不需要 CODEBUDDY_API_KEY、不依赖网络。
@@ -64,8 +74,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: 安装测试期依赖（@deepseek-ai/dsh-llm）
-        run: npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2 --no-audit --no-fund
+      - name: 安装测试期依赖（@deepseek-ai/dsh-llm + @deepseek-ai/cordis）
+        run: npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2 @deepseek-ai/cordis@4.0.5 --no-audit --no-fund
 
       - name: 跑全部测试
         run: node --test "test/*.test.mjs"

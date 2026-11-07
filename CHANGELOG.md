@@ -3,6 +3,420 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.8] - 2026-11-06
+
+修 **拖动条在界面上完全不出现**（前几版都白改）。
+
+### 现象
+
+`document.querySelectorAll('[data-dsh-codebuddy-effort]').length === 0`，槽位没注册成功。
+用户 DevTools 里的决定性证据：
+
+```
+[dsh-codebuddy] 推理等级拖动条：取模型目录失败
+Error: Cannot get property "remote.session" without inject
+    at Object.get (index-BXV-oxvX.js:2:8854)
+    at Proxy.directoryFor (client.js:1034:1)
+    at inject (client.js:1037:1)
+```
+
+### 根因
+
+`ctx.modelDirectories.directoryFor()` 的实现里读的是 `this.ctx.remote.session`。
+cordis 的 `Service` 代理把服务上的 `ctx` 绑成**调用方 fiber** 的 ctx，
+所以这一读走的是**本插件**的注入表。
+
+而本插件的 `inject` 只声明了 `["slots", "locale", "sessions"]`，漏了 `remote.session`，
+cordis 对未声明服务的访问不是返回 `undefined` 而是直接抛错
+（`ReflectService.handler.get`）。异常正好落进 `inject` 回调的 `try/catch`，
+被归类成「会话未绑定」→ 返回 `{available:false}` → 组件一次都没渲染。
+
+官方 `dsh-client-ui-model-selection` 的 `inject` 里 `"remote"`、`"remote.session"` 都在，
+本插件必须照抄。
+
+### 改动
+
+`inject` 与 `ctx.inject([...])` 两处同时补上 `"remote"`、`"remote.session"`
+（两处少一处都会复现，因为 `directoryFor` 用的是**作用域**那份表）。
+
+### 记录
+
+之前三次诊断（style 标签幂等、`@property` 关键帧、`dsh.client.inject`）都不是这条主因。
+样式替换与 rAF 改动本身没问题、保留。
+
+### 为什么这次能确认修好了
+
+新增 `test/cordis-replay.test.mjs`：把 `lib/client.js` 原样挂到 **dsh 自带的真 cordis**
+上跑，用一个「服务挂在兄弟 fiber 上」的宿主（`ctx.provide` 只写自己的 `fiber.store`，
+跨插件靠 Inject 把 impl 复制进消费方 `_store`，所以 inject 是唯一通道）。
+
+- 正向：`inject("session-1").available === true`
+- 负向：把两处 inject 里的 `remote.session` 去掉，必须复现线上那句
+  `cannot get property "remote.session" without inject`
+
+负向用例一开始写成「只去掉作用域那份」并直接把服务 provide 到 root —— 假通过了。
+两个原因都记在测试注释里：作用域是决定性的（`models` 代理捕获了作用域 ctx），
+服务必须挂在兄弟 fiber 上（挂 root 的话任何 fiber 都能沿链找到）。
+
+---
+
+## [1.1.7] - 2026-11-06
+
+加 **输入框底栏的推理等级拖动条**：不用再点开弹框才能换档，且对**所有 provider** 生效。
+
+### 现象
+
+换推理等级本来要 「点模型选择器 → 点「推理等级」→ 再点一档」，三次交互都对同一件事
+重复确认。截图里那一屏（Off / Low / High / Max）就是被藏起来的第二层。
+
+### 做法
+
+新槽位 `conversation.input.right`（`order: -100`），它正是宿主 InputBar 中
+`conversation.input.model` 的**左邻**——所以拖动条天然贴在模型选择器旁边，
+不需要读任何宿主的 CSS-module 哈希类名，也不碰宿主的 DOM。
+
+**为什么不是自己存一个档位**：
+档位状态只有一处真源 —— `ctx.modelDirectories` 的每会话 `ModelDirectory`。
+弹框（`dsh-client-ui-model-selection`）和这个拖动条读同一个 store、调同一个
+`directory.select()`，于是：
+
+| 需求 | 为什么天然成立 |
+|---|---|
+| 默认等级与原逻辑一致 | 两边都是 `current.reasoningEffort ?? reasoning.defaultEffort`；`defaultEffort` 由各适配器自己给（CodeBuddy 是本机定制的「次高档」，官方 DeepSeek 是 `connection.defaults.reasoningEffort`） |
+| 拖动 → 弹框跟着变 | 拖动写 store，弹框下次渲染就读到 |
+| 弹框改 → 拖动条跟着变 | 反向是同一条链 |
+
+自己再存一份档位必然和弹框漂移，所以一行都没存。
+
+**为什么 dsh 原本的模型也能用**：拖动条注册的是宿主公共槽位，读的是全 provider
+共享的目录。只要该模型在 catalog 里声明了 `reasoning.efforts` 就会出现，
+CodeBuddy / DeepSeek 账号 / 第三方适配器一视同仁。
+
+### 请求时机
+
+React 把 `<input type="range">` 的 `onChange` 接在原生 `input` 上（拖动时每移一格都发），
+直接用它提交会打出一串 `selectModel` 并互相覆盖。改成手写原生监听器 + 非受控 value：
+
+- `input` → 只更新标签与 CSS 填充，**零请求**
+- `change` → 一次提交（原生 `change` 只在松手 / 键盘落定时触发）
+
+失败时不弹 toast（会抢输入焦点），而是把滑块弹回宿主真值、文案挂在 `title` 上。
+
+### 其它
+
+- 单档模型（`efforts.length === 1`）只渲染静态标签，不给假拖动条。
+- 子代理会话（`subagentAddress` 非空）不渲染 —— 与模型座位同一判据。
+- 窄容器（`@container (width <= 560px)`，与宿主的阈值一致）收起文字标签只留滑块。
+- 新增 `test/slider.test.mjs`：11 条纯逻辑断言，把「默认档位 / 列表外档位兜底 /
+  单档降级 / 只注册这两个槽」钉住，其中一条在实现阶段抓到了真 bug
+  （无 `efforts` 的模型曾被造出一个只能停在 Default 的假滑块）。
+
+### 外观：D 方案 + 亮度随档位变化
+
+首版那条 76px 的圆角粗轨道视觉上太单薄（光溜溜一条线 + 一个白球，
+既短又看不出有几档）。改为 D 方案：
+
+- 轨道 2px 细线、滑块 11px 小白球 + 外辉光环，宽度 **76px → 150px**。
+- **亮度随档位连续变化**（本次新增的核心）：
+
+| 量 | 最低档 | 最高档 |
+|---|---|---|
+| `filter: brightness` | 0.72 | 1.16 |
+| `opacity` | 0.78 | 1.00 |
+| 辉光半径 | 1px | 10px |
+
+三个量同时随 `--cb-effort-t`（0→1）变化，而不是只调亮度 ——
+只调亮度的话 Off 档仍有明显存在感，暗不下去；叠上不透明度与辉光才真的读得出
+「此刻思考很轻 / 很重」。
+
+**关键实现细节**：`t` 是**连续的比例值**，不是档位序号。拖动过程中（还没松手）
+`input` 事件就实时改写 `--cb-effort-t`，所以越往右滑，手里那条轨道立刻越亮 ——
+等松手才变就太迟了。
+
+`--cb-effort-t` 写在**容器**上而非 `<input>` 上：轨道伪元素、滑块伪元素与文字标签
+都要读它，放容器上三者共享同一份值。（有 `t` 就不需要单独算百分比填充了，
+旧的 `--cb-effort-fill` 一并删除。）
+
+亮度下限取 0.72 而非更低，是因为拖到 Off 时仍要能看见「这里有一条可以拖的轨道」；
+压到 0.6 以下就糊进背景、找不到控件。
+
+窄屏（`@container (width <= 560px)`）收起文字标签，但把省下的宽度给轨道
+（150px → 132px），不会缩回一小截。
+
+预览工具：`test/render-slider-preview.mjs` 从 `lib/client.js` **直接抽取真实 CSS**
+生成静态页，避免预览与实际实现漂移。
+
+### 修复：第一版拖动条完全不出现（控制台也没有任何报错）
+
+首版上线后底栏**什么也没出现**，控制台干净。根因不在渲染逻辑，而比渲染更早一步：
+
+首版写的是
+
+```js
+ctx.inject(["slots", "modelDirectories"], (scope) => {
+  const models = scope.modelDirectories
+  const sessions = scope.sessions          // ← 炸点
+  scope.slots.inject(..., () => scope.slots.register(...))
+})
+```
+
+**外层 `ctx.inject` 的作用域没声明 `sessions`，回调体却读了它。**
+cordis 对未声明服务的访问不是返回 `undefined`，而是直接抛
+`cannot get property "sessions" without inject`（`vendor/cordis` 的
+`ReflectService.handler.get`）。于是回调第一行就中断，
+`scope.slots.register(...)` **一次都没被调用** —— 槽位连注册都没发生。
+
+用真实 cordis 照抄本文件结构重放，结果：
+
+| 版本 | apply 是否执行 | `slots.register` 调用次数 |
+|---|---|---|
+| 首版（外层漏 `sessions`） | 执行了 | **0** |
+| 修复版（含 `sessions`） | 执行了 | **1** |
+
+注意 `applyRan=true`：插件本身加载正常，只是注册那一步死了。
+异常没有冒到浏览器控制台（被记进 cordis fiber），所以症状是
+「什么都没发生、也什么都没说」。
+
+修复：
+
+1. 外层 `ctx.inject([...])` 补上 `sessions`（顶层 `inject` 一并声明，
+   它是真实依赖，也保证 apply 在 sessions 就绪后运行）。
+2. 顺手收紧取目录的 `catch`：只对 `directoryFor` 自己抛的
+   `resolved no scope` / `resolved no binding`（会话重建中、已关闭）安静返回，
+   **其它异常一律 `console.error`**，不再把结构性错误伪装成「不可用」。
+
+回归护栏（`test/slider.test.mjs` 现共 14 条）：新增一条**作用域一致性检查**，
+静态解析每个 `ctx.inject([...], …)`，把它声明列表与回调体里所有
+`scope.X` 读取做差集，任何漏声明直接红。已验证它能在首版代码上报出：
+
+```
+ctx.inject([slots, modelDirectories]) 的回调读了 scope.sessions，但没声明它
+```
+
+（写这条护栏时自己先踩了两个坑并修掉：正则必须行首锚定否则匹配到注释；
+正文切分必须从匹配末尾开始，否则会切到本次匹配自身、正文恒为空、护栏变摆设。）
+
+### 交互重做：连续滑动 + 松手吸附 + 呼吸灯
+
+#### 卡顿的真正原因：原生 range 按 step 量化
+
+旧实现用 `<input type="range" step="1" max="3">`。原生 range 是**按 step
+量化**的 —— 4 个档位就只有 4 个停靠点，指针移动时滑块只能在格点间跳，
+这就是「滑动不流畅」的全部来源。不是缓动曲线的问题，改 CSS 治不好。
+
+改用自绘轨道（`div` + `pointerdown/move/up`）：
+
+| | 旧（原生 range） | 新（自绘） |
+|---|---|---|
+| 位置取值 | 4 个离散格点 | **连续像素** |
+| 拖动中 | 每次 `input` 都 `setState` → React 重渲染 | **只改 CSS 变量，零 setState** |
+| 视觉效果 | 一格一格蹦 | 指针动 1px 滑块走 1px |
+
+关键：`pointermove` 里只写 `--cb-effort-pos` 与 `data-*`，**完全不碰 React state**。
+这是"跟手"的根本；一旦每帧 setState，鼠标事件密集时必然掉帧。
+
+#### 松手才吸附
+
+拖动期间位置自由（连续），`pointerup` / `pointercancel` 才把连续位置
+`Math.round(ratio * lastIndex)` 吸到最近档位，并且：
+
+- 吸附走 `cubic-bezier(.22, 1, .36, 1)` / 260ms 的缓动，有"咔哒"落定感；
+- 吸附到位后才提交**一次** `selectModel`（一次手势 = 一次请求）；
+- 过渡只在 `data-settling="1"` 时启用 —— 拖动中加 transition 会拖出一条延迟。
+
+键盘也可用：方向键一次一档，Home/End 到两端。
+
+#### 呼吸灯（亮度区间有硬约束）
+
+要求：亮度不超过本档上限，最低不低于前一档上限。于是把 `[0.62, 1.34]`
+切成 `lastIndex + 1` 份，每档占一个**峰值**：
+
+```
+档位 i 峰值 = 0.62 + STEP * (i + 1)
+档位 i 下限 = 档位 i-1 的峰值（首档取 0.62）
+```
+
+相邻档首尾相接，亮度逐档右移，呼吸时永不越界。
+用 `@property` 注册 `--cb-lum` / `--cb-glow` 为 `<number>` / `<length>`，
+使其可在 keyframes 里连续插值（已用 CDP 实测：40 帧采样到 37 个不同值）。
+
+拖动中停掉呼吸（`animation: none`），亮度钉在本档上限 ——
+正在被手控制的东西还自顾自闪会晃眼。
+
+`@media (prefers-reduced-motion: reduce)` 下关闭呼吸，位置照常可拖。
+
+#### 两个自己踩的坑（都已修）
+
+1. **首档呼吸窗口宽度为 0**：最初峰值写成 `0.62 + STEP * i`，于是首档峰值
+   恰好等于全局下限，窗口变成 `[0.62, 0.62]` —— 数值全对、看着像跑通了，
+   但首档**纹丝不动**。改成 `(i + 1)` 才真正有宽度。
+2. **局部变量遮蔽全局 `window`**：曾用 `const window = useMemo(...)` 存亮度窗口，
+   直接让 `window.setTimeout(...)` 变成对普通对象的调用，吸附收尾必然抛错。
+   已改名 `glowWin`。
+
+护栏（`test/slider.test.mjs` 现 17 条）新增 3 条：
+呼吸窗口宽度 > 0 且相邻档首尾相接；不得再用原生 range 的 step 量化；
+`onMove` 内不得出现 `setState`。其中"首档宽度为 0"这条正是被测试抓出来的。
+
+验证脚本：`test/gen-breathe-preview.mjs` 从 `lib/client.js` 抽取真实 CSS 与
+真实窗口函数生成预览；`preview/verify-anim.mjs` 用 CDP 实测每档亮度轨迹是否越界。
+
+### 加粗轨道 + 放大呼吸幅度
+
+反馈两点：轨道太细、呼吸灯看不出来。
+
+#### 轨道加粗
+
+| | 之前 | 现在 |
+|---|---|---|
+| 轨道高度 | 2px 细线 | **6px 实心** |
+| 滑块 | 11px | **14px** |
+| 宽度 | 150px | **160px** |
+
+未到达区间加了 `inset` 内阴影，6px 的圆柱感更实。填充条与轨道严格同高。
+
+#### 呼吸为什么看不出来，以及怎么修
+
+亮度被用户的两条约束（不超本档上限、不低于前档上限）限死在相邻两档之间，
+**4 档时幅度只有 0.18**，折算视觉约 15% —— 单靠亮度就是"几乎看不出"。
+
+更糟的是我第一版把辉光半径也**从亮度推导**（`glowAt(lumLo)/glowAt(lumHi)`），
+于是辉光摆幅被同一个 0.18 一起压扁，实测只有 **3~4px**。
+
+修法：亮度仍严格守住约束，但把**辉光半径与光晕浓度解耦成独立摆幅**：
+
+| 量 | 之前 | 现在 |
+|---|---|---|
+| 亮度 `--cb-lum` | 窗口内 0.14~0.36 | 不变（受约束） |
+| 辉光 `--cb-glow` | 3~4px 摆幅 | **16.8~36px 摆幅** |
+| 光晕 `--cb-halo` | 无此变量 | **0.22 → 0.85 摆幅** |
+
+辉光基线按档位走（越右越亮），摆幅固定取基线的 `×0.35 ~ ×1.85`。
+光晕是加性发光，不改变轨道本身的亮度语义，所以不违反约束，
+却把"在呼吸"放大到一眼可见。节奏也从 3.2s 收紧到 **2.6s**。
+
+#### 护栏
+
+`test/slider.test.mjs` 现 19 条，新增 2 条并已验证它们能在旧代码上报红：
+
+```
+lastIndex=1 第 0 档辉光摆幅仅 8.0px，太不明显（需 >= 12px）
+轨道只有 2px，太细（需 >= 5px）
+```
+
+第一条正是"辉光跟亮度走"这个错误的形状——把摆幅和亮度耦合在一起，
+数值上说得通，视觉上等于没动。
+
+验证脚本：`preview/verify-breathe.mjs` 用 CDP 采样三个维度的实际摆幅；
+`preview/capture-phases.mjs` 分别抓呼吸谷/峰两帧并排对比。
+
+### 修复：重启后拖动条彻底消失
+
+现象：重启 DSH 后底栏完全没有拖动条，模型选择器左侧连占位都没有，控制台干净。
+
+#### 根因：样式注入的幂等性写错了
+
+`apply` 里注入 CSS 的那段原来是：
+
+```js
+if (document.querySelector('style[data-plugin-css="' + id + '"]')) return () => {}
+```
+
+**标签已存在就提前 return。** 于是插件重新挂载（重启 / HMR）时，
+head 上还挂着上一版的 `<style>`，新 CSS 被整段跳过 ——
+页面继续用着旧样式，而新版本把轨道从 2px 改成了 6px、把呼吸幅度整体放大，
+这些改动一律没生效。更糟的是当时的旧样式与新 DOM 结构对不上：
+新版组件渲染的是 `.cb-effort-track`（自绘 div），旧 CSS 还指着
+`.cb-effort-range`（原生 input），于是渲染出来的节点没有任何尺寸与颜色，
+视觉上就是"什么都没出现"。
+
+改成每次挂载都替换旧标签：
+
+```js
+const previous = document.querySelector('style[data-plugin-css="' + id + '"]');
+...
+if (previous !== null) previous.replaceWith(style);
+else document.head.appendChild(style);
+```
+
+#### 同时清掉一处重复定义
+
+上一轮编辑时残留了一份 `EffortSlider` 的旧副本（同名函数声明两份）。
+JS 里后者覆盖前者、不报错，所以它没直接引发故障，但属于必须清掉的隐患。
+
+#### 新增两个验证手段
+
+1. `test/render-effort.test.mjs` —— 用真实组件代码 + 极简 hooks 实现**真的渲染一次**，
+   断言四种输入下的产出（正常 4 档 / catalog 未就绪 / current 为空 / 单档）。
+   这一步把"return null"与"渲染期抛错"彻底区分开 ——
+   前几轮只读代码猜原因，正是卡在这里。
+2. `test/slider.test.mjs` 新增样式注入护栏：禁止「查到标签就提前 return」，
+   必须显式 `replaceWith`/`removeChild`。已验证它能在旧写法上报红：
+
+   ```
+   不允许「标签已存在就提前 return」——必须替换旧标签，否则新 CSS 永远不生效
+   ```
+
+`test/slider.test.mjs` 现 20 条，另加渲染测试 4 个场景。
+
+### 修复：拖动条在重启后彻底不显示（第二次）
+
+上次的样式注入修复不够。真正的问题在于**用了 `@property` + CSS keyframes 驱动呼吸灯**。
+
+#### 为什么这条路会静默失败
+
+呼吸灯原本靠 `@property --cb-lum { syntax: '<number>' }` 把自定义属性注册成
+可插值类型，再由 `@keyframes` 在 `--cb-lum-lo` / `--cb-lum-hi` 之间往复，
+最后用 `filter: brightness(var(--cb-lum))` 体现在元素上。
+
+这有三个串行依赖，任一断掉就整条失效：
+
+1. `@property` 必须注册成功。插件样式表是**运行期注入 `<style>`** 的，
+   它的注册时机与宿主样式表存在竞争；一旦没注册上，`--cb-lum` 退化成普通
+   字符串，不可插值；
+2. 不可插值 → `@keyframes` 里那几行自定义属性动画整段无效；
+3. 值失效 → `filter: brightness(var(--cb-lum))` 与
+   `color-mix(..., calc(var(--cb-halo) * 100%), ...)` 一起作废。
+
+结果是元素虽然渲染了 DOM、也有尺寸，却完全不显示 —— 且不抛任何错误。
+
+#### 改法：呼吸灯改由 JS 驱动
+
+`EffortControl` 里加了一个 `requestAnimationFrame` 循环，每帧直接写
+`--cb-lum` / `--cb-glow` / `--cb-halo` 三个变量：
+
+```js
+const tri = t < 0.5 ? t * 2 : (1 - t) * 2;   // 三角波
+const eased = tri * tri * (3 - 2 * tri);     // smoothstep，接近 ease-in-out
+root.style.setProperty("--cb-lum", String(lumLo + (lumHi - lumLo) * k));
+```
+
+这样只剩一个依赖：元素存在。没有任何注册时机问题。
+`prefers-reduced-motion` 时直接不启动循环；拖动中把 `k` 钉在 1（不呼吸）。
+
+CSS 里现在只剩静态变量声明，`@property` / `@keyframes` / `animation:` 全部移除。
+
+#### 同时回退一处自己引入的风险
+
+第 5 轮往 `package.json` 的 `dsh.client.inject` 里加了
+`@deepseek-ai/dsh-client-ui-model-selection`。该包只存在于 DSH 安装目录，
+**不在 profile 的 `node_modules` 里**，而 `dsh.client.inject` 会参与
+client-modules 的图排序与 prune 保留判定。这是在"工作正常"之后引入的额外风险，
+已回退为原来的单项。
+
+#### 验证方式（这次用实测而非读代码）
+
+`test/gen-measure.mjs` 从 `lib/client.js` 抽出真实 CSS，配上真实 DOM 结构与
+真实的档位变量，在 Chromium 里测量每个元素：
+
+```
+root  193.25 x 26   track 160 x 26   rail 160 x 6
+fill  106.66 x 6    knob  14 x 14
+parsedRules=13  propertyRules=0  keyframes=0
+```
+
+全部有实际尺寸、`opacity=1`、`visibility=visible`，且已不依赖 `@property`。
+
 ## [1.1.6] - 2026-11-06
 
 修 **控制台「使用端」为空**：补齐 CodeBuddy 请求标准要求的客户端标识头。

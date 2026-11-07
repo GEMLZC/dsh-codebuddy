@@ -201,6 +201,38 @@ dsh plugin --profile <你的profile> add github:<owner>/dsh-codebuddy
 
 改这个规则只动一处：`lib/index.js` 的 `defaultEffortFor()`。
 
+#### 底栏拖动条（v1.1.7）
+
+输入框底栏、模型选择器**左侧**多了一个滑块，直接拖动换档，不必再点开弹框两层菜单。
+
+它和弹框说的是同一件事，因为只有一处真源：
+
+- 注册在宿主公共槽位 `conversation.input.right`（`order: -100`，即模型座位的左邻），
+  不读宿主的哈希类名、不改宿主 DOM。
+- 档位列表与当前值都读 `ctx.modelDirectories` 的每会话 `ModelDirectory` ——
+  和 `dsh-client-ui-model-selection` 的 `ModelSelect` 用的是**同一个 store**，
+  提交也走同一个 `directory.select()`。
+
+由此得到的三条性质：
+
+| 性质 | 为什么 |
+|---|---|
+| 默认等级与原来完全一致 | 两边同一表达式 `current.reasoningEffort ?? reasoning.defaultEffort`，`defaultEffort` 仍由上面的 `defaultEffortFor()` 决定 |
+| 拖动 → 弹框同步 | 拖动写进同一个 store，弹框重渲染即读 |
+| 弹框改 → 拖动条同步 | 反向同一条链 |
+
+**对所有 provider 生效**：它注册的是公共槽位、读的是全 provider 共享的目录，
+所以官方 DeepSeek 账号的模型（如 `deepseek-flash` 的 off/low/high/max）也同样可拖，
+不限于 CodeBuddy 路由。
+
+**请求时机**：`input` 只做视觉预览，`change`（松手 / 键盘落定）才提交一次 ——
+一次拖动 = 一次 `selectModel`。失败时滑块弹回原档、原因挂在 `title` 上，
+不弹 toast（会抢输入焦点）。
+
+**什么时候不出现**：该模型没声明 `reasoning.efforts`、尚无当前模型、子代理会话，
+或该模型只有一个档位（此时只画静态标签，不画假滑块）。
+窄宽度（`≤ 560px`，与宿主同一阈值）会收起文字标签只留滑块。
+
 ---
 
 ## 数据与隐私
@@ -280,16 +312,41 @@ CI：每次 push 与 PR 都会跑全量测试（`.github/workflows/ci.yml`）。
 **为什么 CI 里能跑**：`lib/index.js` 顶层 import `@deepseek-ai/dsh-llm`，该包**已发布到 npm**，CI 里装它即可，无需安装整个 DSH：
 
 ```bash
-npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2   # ⚠️ 必须钉版本：该包 dist-tags 的 latest 是很旧的 0.0.1-rc.1
+npm i -D @deepseek-ai/dsh-llm@0.2.0-rc.2 @deepseek-ai/cordis@4.0.5   # ⚠️ 两个都要钉版本：dsh-llm 的 latest 是很旧的 0.0.1-rc.1
 node --test "test/*.test.mjs"
 ```
 
 > 写成 glob（**引号要保留**）而不是 `node --test test/`：Node 的 `--test` 只把**文件/glob** 当测试入口，
 > 裸目录名会被当成 CJS 入口模块去 require，直接 `MODULE_NOT_FOUND` 并记成 1 个失败测试。
 
-测试覆盖：SSE 解析边界（CRLF 跨分片、多行 `data:`、尾帧）、块生命周期与 index 分配、工具调用参数拼接、`usage` 计数互斥、错误分类（11102 / 11115 / 14018 / 401 / 5xx）、流截断守卫、**流式空闲超时**、目录合并（增/减/作用域）、探测的熔断与总时限、**模型清单双副本一致性**，以及一个**本地 mock 网关**端到端。
+测试覆盖：SSE 解析边界（CRLF 跨分片、多行 `data:`、尾帧）、块生命周期与 index 分配、工具调用参数拼接、`usage` 计数互斥、错误分类（11102 / 11115 / 14018 / 401 / 5xx）、流截断守卫、**流式空闲超时**、目录合并（增/减/作用域）、探测的熔断与总时限、**模型清单双副本一致性**、**底栏拖动条的默认档位与档位序列**（`test/slider.test.mjs`，纯函数、零 DOM）、**拖动条的呼吸灯窗口与拖动连续性**（`test/render-effort.test.mjs`，用 mini-hooks 渲染真组件）、**真 cordis 回放**（`test/cordis-replay.test.mjs`），以及一个**本地 mock 网关**端到端。
+
+> `test/cordis-replay.test.mjs` 把 `lib/client.js` 挂到**真的 cordis** 上跑，专门守一类
+> 只有真 fiber 才暴露的故障：`ctx.inject([...])` 里漏声明一个服务名时，cordis 不是返回
+> `undefined` 而是**直接抛错**，异常被 `inject` 回调的 `try/catch` 吃掉后就表现为
+> 「槽位在、组件渲染成 null、界面什么都没有、控制台可能只有一行」——v1.1.7 的拖动条
+> 就是这么整条不见的。它按「裸包名 → `DSH_CORDIS_PATH` → `~/.dsh/profiles/*`」找 cordis，
+> 三者都空则**跳过**而不是失败；没有 `Service.associate` 语义的 cordis 版本同样跳过。
 
 > 在本机开发时，测试要在**已安装副本**里跑 —— `lib/index.js` 要解析的 `@deepseek-ai/dsh-llm` 是 DSH profile 提供的。把 `lib/` 与 `test/` 同步到 `<profile>/node_modules/dsh-codebuddy/` 再跑。（CI 里不需要这一步，因为依赖直接从 npm 装。）
+>
+> `test/slider.test.mjs`、`test/render-effort.test.mjs`、`test/cordis-replay.test.mjs` 都不 import `lib/index.js`，所以在仓库里也能直接跑。回放测试要用 DSH 安装目录里那份 cordis 指个路：
+>
+> ```bash
+> DSH_CORDIS_PATH="<dsh app>/node_modules/@deepseek-ai/cordis/lib/index.js" node --test test/cordis-replay.test.mjs
+> ```
+>
+> ⚠️ 同步到已安装副本时**不要直接 `Copy-Item` 覆盖**：pnpm 装出来的文件是
+> **content-addressed store 的硬链接**，原地覆盖会写穿同一个 inode，把 store 里的
+> blob 一起改掉（之后任何 `pnpm install` 都会拿到被污染的内容）。
+> 正确做法是先 `Remove-Item` 目标文件再拷贝，让目录项指向新 inode：
+
+```powershell
+$ws  = '<repo>'
+$dst = "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-codebuddy"
+Remove-Item "$dst\lib\client.js" -Force
+Copy-Item   "$ws\lib\client.js" "$dst\lib\client.js"
+```
 
 ---
 
