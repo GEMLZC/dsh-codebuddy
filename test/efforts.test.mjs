@@ -225,14 +225,22 @@ test('default: 默认值 = 顶档再低一级（不是顶档，也不是最低�
   assert.equal(defaultEffortFor('hy4-preview'), 'high', 'hy4-preview 只有 high')
 })
 
-test('default: 未收录模型与单值档位模型不设默认（避免给网关发没验过的档位）', () => {
-  // 未收录：走 DEFAULT_EFFORT_SPEC 的猜测档位，发出去可能 400/11133
+test('default: 未收录/新上线模型也要落到次高档（2026-11-17 回归）', () => {
+  // 修复前这里返回 undefined → 拖动条停在 Default，官方每次上新模型必现。
+  // 修复后与 effortsForModel 同源：兜底 high/max → 次高档 high。
   for (const model of ['auto', 'hy3-preview', 'hy3-preview-agent', 'minimax-m3', 'kimi-k3',
-    'fast-model', 'balanced-model', 'deep-model', 'totally-unknown-model']) {
-    assert.equal(defaultEffortFor(model), undefined, `${model} 未实测档位，不应设默认`)
+    'totally-unknown-model', 'brand-new-model-2027', 'never-seen-before-xyz']) {
+    const value = defaultEffortFor(model)
+    assert.equal(value, 'high', `${model} 未收录，应自动落到兜底档位的次高档 high`)
+    assert.ok(ids(model).includes(value), `${model} 的默认值 ${value} 必须在自己的 efforts 里`)
   }
-  // tiers: [] —— 'high' 只是选择器兜底的假档，不能当默认发出去
-  for (const model of ['glm-5v-turbo', 'minimax-m3-pay', 'kimi-k2.7', 'kimi-k2.6', 'kimi-k2.5']) {
+})
+
+test('default: 明确声明 tiers:[] 的单值强度模型仍不设默认', () => {
+  // 这些不是"未收录"，而是表里显式声明单一固定强度 —— 'high' 只是兜底假档，
+  // 不能当默认往网关发，保持 undefined（拖条不渲染/停 Default）。
+  for (const model of ['glm-5v-turbo', 'minimax-m3-pay', 'kimi-k2.7', 'kimi-k2.6', 'kimi-k2.5',
+    'fast-model', 'balanced-model', 'deep-model']) {
     assert.equal(defaultEffortFor(model), undefined, `${model} 是单值强度模型，不应设默认`)
   }
 })
