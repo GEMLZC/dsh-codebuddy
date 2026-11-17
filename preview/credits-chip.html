@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+/* 真实浅色主题下的宿主变量（取值来自 tokens 的设计稿；缺的都落回插件自己的 fallback） */
+:root {
+  --dsw-radius-sm: 6px;
+  --dsw-alias-label-primary: #1f2126;
+  --dsw-alias-label-secondary: #6b7280;
+  --dsw-alias-label-tertiary: #8b919c;
+  --dsw-alias-label-dimmed: #aab0ba;
+  --dsw-alias-separator-primary: rgba(31,33,38,.22);
+  --dsw-alias-interactive-bg-hover: rgba(31,33,38,.06);
+  --dsw-alias-state-error-primary: #c0304a;
+  --dsw-alias-state-warn-label: #b8790a;
+  --dsw-alias-state-business-primary: #4a7dff;
+  --dsh-content-font-size-secondary: 13px;
+  --dsh-content-font-delta-secondary: 0px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 32px; display: flex; flex-direction: column; align-items: flex-start;
+  background: #f7f8fa;
+  font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.sub { font-size: 12px; color: #6b7280; margin: 0 0 22px; }
+.cell { margin-bottom: 20px; }
+.cell-label { font-size: 12px; color: #6b7280; margin-bottom: 7px; }
+/* 宿主 composer.dock 的真实形状：居中一行、gap 12px、padding-top 4px。
+ * 宽度按真实的 composer 卡宽（--dsh-composer-card-max-width 取 768px）来，
+ * 否则「四个胶囊挤不挤」这个判断会被一个假的窄容器扭曲。 */
+.dock-row {
+  display: flex; justify-content: center; align-items: center; gap: 12px;
+  width: 768px; max-width: 100%; padding: 6px 12px;
+  background: #fff; border-radius: 10px;
+  border: 1px solid rgba(31,33,38,.09);
+  box-shadow: 0 1px 2px rgba(31,33,38,.04);
+}
+/* 宿主自己的统计胶囊：用同一套变量，验证「看起来是同一行的一部分」 */
+.host-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 1px 8px; border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: calc(var(--dsh-content-font-size-secondary) - 1px);
+  line-height: 20px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.host-pill svg { width: 14px; height: 14px; flex: none; }
+.host-sep { color: var(--dsw-alias-separator-primary); margin: 0 2px; }
+/* 插件自己的 CSS，原样来自 lib/client.js */
+
+.cb-wrap { display: flex; flex-direction: column; gap: 14px; font-size: 14px; }
+.cb-row { display: flex; flex-direction: column; gap: 6px; }
+.cb-label { font-weight: 600; opacity: .9; }
+.cb-hint { font-size: 12px; opacity: .6; line-height: 1.5; }
+.cb-input { padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.35);
+            background: rgba(128,128,128,.08); color: inherit; font-size: 13px; font-family: inherit; }
+.cb-input:focus { outline: 2px solid rgba(90,140,255,.5); outline-offset: 0; }
+.cb-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.cb-btn { padding: 7px 14px; border-radius: 6px; border: 1px solid rgba(128,128,128,.35);
+          background: rgba(128,128,128,.12); color: inherit; cursor: pointer; font-size: 13px; }
+.cb-btn:hover:not(:disabled) { background: rgba(128,128,128,.22); }
+.cb-btn:disabled { opacity: .45; cursor: not-allowed; }
+.cb-btn.primary { background: rgba(90,140,255,.2); border-color: rgba(90,140,255,.5); }
+.cb-msg { padding: 8px 10px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+.cb-ok { background: rgba(60,180,100,.15); border: 1px solid rgba(60,180,100,.4); }
+.cb-err { background: rgba(220,80,80,.15); border: 1px solid rgba(220,80,80,.4); }
+.cb-info { background: rgba(90,140,255,.12); border: 1px solid rgba(90,140,255,.35); }
+.cb-models { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto;
+             padding: 8px; border-radius: 6px; background: rgba(128,128,128,.08); }
+.cb-model { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; }
+.cb-model:hover { background: rgba(128,128,128,.12); }
+.cb-model code { font-size: 12px; opacity: .85; }
+.cb-check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.cb-check input { cursor: pointer; }
+.cb-badge { font-size: 11px; padding: 1px 6px; border-radius: 999px;
+            background: rgba(128,128,128,.18); opacity: .85; }
+.cb-badge-img { background: rgba(90,140,255,.22); border: 1px solid rgba(90,140,255,.45); opacity: 1; }
+
+/* ── 输入框下方那一行的积分读数 ────────────────────────────────
+ * 与宿主自己的统计胶囊（轮次/步数/token）同一排、同一字号、同一套颜色变量，
+ * 所以它读起来是「那一行的一部分」，而不是外挂上去的一块。
+ * 只吃 label-* 与 state-* 变量：换主题时自动跟着变，不需要为深浅色各写一套。
+ */
+.cb-credits {
+  display: inline-flex; align-items: center; gap: 6px;
+  /* flex 子项：允许被压缩，但不允许撑破那一行。
+     min-width: 0 是关键 —— 没有它，nowrap 的文本会把 min-content 顶成硬宽度，
+     于是 justify-content:center 的 dock 行会**两边一起溢出**（实测左溢 65px）。 */
+  flex: 0 1 auto; min-width: 0;
+  max-width: 100%;
+  padding: 1px 8px;
+  border: none; border-radius: var(--dsw-radius-sm, 6px);
+  background: 0 0; color: var(--dsw-alias-label-tertiary, #7c828c);
+  font: inherit;
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; cursor: pointer;
+}
+.cb-credits:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14));
+                    color: var(--dsw-alias-label-secondary, #9aa0aa); }
+.cb-credits:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #5a8cff));
+}
+.cb-credits[data-busy="1"] { opacity: .7; }
+.cb-credits[data-error="1"] { color: var(--dsw-alias-state-error-primary, #b42c3f); }
+.cb-credits-icon { flex: none; width: 14px; height: 14px; display: block; opacity: .85; }
+.cb-credits-sep { color: var(--dsw-alias-separator-primary, rgba(128,128,128,.45)); margin: 0 2px; }
+/* 今日消耗是这颗胶囊的重点：给它一点主色，与「剩余」区分开 */
+.cb-credits-today { color: var(--dsw-alias-label-secondary, #9aa0aa);
+                    min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cb-credits-today b { font-weight: 600; color: var(--dsw-alias-label-primary, #e6e8ec); }
+.cb-credits-left { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cb-credits-left b { font-weight: 600; }
+.cb-credits[data-low="1"] .cb-credits-left b { color: var(--dsw-alias-state-warn-label, #d68a00); }
+.cb-credits[data-empty="1"] .cb-credits-left b { color: var(--dsw-alias-state-error-primary, #b42c3f); }
+/* 窄屏只留「剩余」，今日消耗藏在 title 里 —— 宁可少一个数字也不挤成一团。
+ *
+ * ⚠️ 这里用 @media 而**不是** @container：宿主 composer 的 .dock 容器
+ * 没有声明 container-type（只有 header 的 titleRow 有），所以容器查询
+ * 一条都不会命中 —— 写了等于没写。viewport 宽度是那条链上唯一真实存在的判据。 */
+@media (max-width: 640px) {
+  .cb-credits-today, .cb-credits-sep { display: none; }
+}
+
+/* ── 输入框底栏的推理等级拖动条 ────────────────────────────────
+ * 三段式设计：
+ *   ① 拖动连续、无档位跳变 —— 自己画轨道，不用原生 input[type=range]
+ *   ② 松手才吸附到最近档位（带缓动）
+ *   ③ 呼吸灯：亮度在「本档下限 → 本档上限」之间往复
+ *
+ * ── 为什么不用原生 range ───────────────────────────────────────
+ * 原生 range 是**按 step 量化的**：4 个档位就只能有 4 个停靠点，
+ * 拖动时滑块一格一格地蹦，这就是「不流畅/卡顿」的全部来源。
+ * 改成自绘轨道后：
+ *   · 位置是【连续像素】，鼠标移动 1px 它就动 1px，原生没有任何量化；
+ *   · 拖动期间**完全不碰 React state**（只改 CSS 变量 + transform），
+ *     不触发重渲染，所以跟手；
+ *   · 松手后才做一次吸附 + 一次 selectModel 提交。
+ *
+ * ── 呼吸灯的亮度区间（关键约束）────────────────────────────────
+ * 用户要求：亮度不得超过当前档位的最高亮度，最低亮度 = 前一档的最高亮度。
+ * 所以每一档 [i] 界定一个亮度窗口：
+ *      窗口下限 = max(全局最低亮度, 档位 i-1 的高亮度)
+ *      窗口上限 = 档位 i 的高亮度
+ * 首档没有前一档，下限就用全局最低亮度。窗口由 JS 写成两个 CSS 变量，
+ * @property 让它们可以在 keyframes 里被连续插值。
+ */
+/* 呼吸灯由 JS 的 requestAnimationFrame 驱动（见 EffortControl 的 breathing effect）。
+ *
+ * 为什么不用 CSS @property + keyframes：
+ * 那条路依赖 @property 注册成功，一旦插件样式表被后注入 / 被宿主覆盖，
+ * --cb-lum 会退化成不可插值的普通自定义属性，动画与
+ * filter: brightness(var(...)) 一起失效，元素可能直接不可见。
+ * 这在真机上表现为"代码没错但什么都不显示"，排查成本极高。
+ * JS 写变量没有这层依赖：只要元素在，值一定生效。
+ */
+.cb-effort {
+  display: flex; align-items: center; gap: 8px; flex: none; min-width: 0;
+  --cb-effort-accent: var(--dsw-alias-state-business-primary, #4d7cff);
+  /* 位置：0..1 的连续比例。拖动时直接改这个变量，不经过 React */
+  --cb-effort-pos: 0;
+  /* 亮度 / 辉光 / 光晕：由 rAF 每帧写入 */
+  --cb-lum: 1;
+  --cb-glow: 4px;
+  --cb-halo: .3;
+}
+.cb-effort-label {
+  flex: none; max-width: 58px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 11px; line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-caption, #81858c); user-select: none;
+}
+
+/* 自绘轨道：可点击/可拖拽的命中区 */
+.cb-effort-track {
+  position: relative; flex: none;
+  width: 160px; height: 26px;
+  cursor: pointer; touch-action: none; user-select: none;
+  filter: brightness(var(--cb-lum));
+}
+.cb-effort-track:focus-visible { outline: none; }
+.cb-effort-track:focus-visible .cb-effort-knob {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cb-effort-accent) 55%, transparent);
+}
+/* 底层轨道（未到达区间）：6px 实心，比之前的 2px 细线厚得多 */
+.cb-effort-rail {
+  position: absolute; left: 0; right: 0; top: 50%; height: 6px;
+  transform: translateY(-50%); border-radius: 999px;
+  background: rgba(255, 255, 255, .18);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, .18);
+}
+/* 已达到区间：宽度跟随 --cb-effort-pos，带随呼吸脉动的外发辉光 */
+.cb-effort-fill {
+  position: absolute; left: 0; top: 50%; height: 6px;
+  transform: translateY(-50%); border-radius: 999px;
+  width: calc(var(--cb-effort-pos) * 100%);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--cb-effort-accent) 55%, transparent),
+    var(--cb-effort-accent));
+  box-shadow:
+    0 0 var(--cb-glow) color-mix(in srgb, var(--cb-effort-accent) 85%, transparent),
+    0 0 calc(var(--cb-glow) * .45) color-mix(in srgb, var(--cb-effort-accent) 95%, transparent);
+}
+/* 滑块：用 translate 定位（合成层，不触发布局）。
+   外圈光晕吃 --cb-halo，呼吸时明显胀缩。 */
+.cb-effort-knob {
+  position: absolute; top: 50%; left: 0;
+  width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: #fff; border: none;
+  transform: translateX(calc(var(--cb-effort-pos) * 160px));
+  box-shadow:
+    0 0 0 2.5px color-mix(in srgb, var(--cb-effort-accent) 45%, transparent),
+    0 0 calc(var(--cb-glow) * 1.4)
+      color-mix(in srgb, var(--cb-effort-accent) calc(var(--cb-halo) * 100%), transparent),
+    0 0 calc(var(--cb-glow) * 2.6)
+      color-mix(in srgb, var(--cb-effort-accent) calc(var(--cb-halo) * 55%), transparent);
+  will-change: transform;
+}
+/* 松手吸附：只给位置加缓动，拖动中不加（否则会拖出一条延迟） */
+.cb-effort[data-settling="1"] .cb-effort-knob,
+.cb-effort[data-settling="1"] .cb-effort-fill {
+  transition: transform .26s cubic-bezier(.22, 1, .36, 1),
+              width .26s cubic-bezier(.22, 1, .36, 1);
+}
+.cb-effort-track:active .cb-effort-knob {
+  transform: translateX(calc(var(--cb-effort-pos) * 160px)) scale(1.1);
+}
+
+.cb-effort-busy .cb-effort-label { opacity: .55; }
+.cb-effort-error { --cb-effort-accent: var(--dsw-alias-state-error-primary, #b42c3f); }
+.cb-effort-error .cb-effort-label { color: var(--dsw-alias-state-error-primary, #b42c3f); }
+@container (width <= 560px) {
+  /* 收起文字标签，把省下的宽度全给轨道 —— 窄屏也不缩成一小截 */
+  .cb-effort-label { display: none; }
+  .cb-effort-track { width: 140px; }
+  .cb-effort-knob { transform: translateX(calc(var(--cb-effort-pos) * 140px)); }
+}
+
+</style></head>
+<body>
+  <h1>输入框下方那一行 · CodeBuddy 积分读数</h1>
+  <p class="sub">左侧为插件新增的读数，右侧三个是与宿主自己的统计胶囊（轮次 / token / 上下文）并排的效果。样式与文案全部来自 lib/client.js，未在页面里重写。</p>
+  
+    <div class="cell">
+      <div class="cell-label">正常（今日 190.73 / 剩余 5759.9）</div>
+      <div class="dock-row">
+        <button type="button" class="cb-credits" data-dsh-codebuddy-credits="" data-busy="0" data-low="0" data-empty="0" title="CodeBuddy 积分
+账号：夜空～最亮的星
+套餐：标准版
+剩余：5,759.9
+今日已用：190.73
+今日请求：308 次
+点击刷新（只读，不消耗积分）" aria-label="CodeBuddy 积分：5,759.9，今日已用 190.73"><svg class="cb-credits-icon" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false"><circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4"></circle><path d="M9.6 5.9c-.35-.42-.95-.68-1.6-.68-1.1 0-1.9.6-1.9 1.4 0 .72.6 1.06 1.65 1.3 1.05.24 1.7.5 1.7 1.32 0 .83-.85 1.35-2 1.35-.75 0-1.4-.24-1.8-.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path><path d="M8 4.1v7.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path></svg><span class="cb-credits-today">今日 <b >190.73</b></span><span class="cb-credits-sep" aria-hidden>·</span><span class="cb-credits-left">剩余 <b >5,759.9</b></span></button>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 11a5 5 0 0 1 10 0" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>3 轮 122 步</span></span>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><ellipse cx="8" cy="4" rx="5" ry="2" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>23.8M tok</span><span class="host-sep">·</span><span>缓存命中 99%</span></span>
+        <span class="host-pill"><span>24%</span></span>
+      </div>
+    </div>
+    <div class="cell">
+      <div class="cell-label">低余额（剩余 120 / 共 10300 → 1.2%）</div>
+      <div class="dock-row">
+        <button type="button" class="cb-credits" data-dsh-codebuddy-credits="" data-busy="0" data-low="1" data-empty="0" title="CodeBuddy 积分
+账号：夜空～最亮的星
+剩余：120.4
+今日已用：88.13
+点击刷新（只读，不消耗积分）" aria-label="CodeBuddy 积分：120.4，今日已用 88.13"><svg class="cb-credits-icon" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false"><circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4"></circle><path d="M9.6 5.9c-.35-.42-.95-.68-1.6-.68-1.1 0-1.9.6-1.9 1.4 0 .72.6 1.06 1.65 1.3 1.05.24 1.7.5 1.7 1.32 0 .83-.85 1.35-2 1.35-.75 0-1.4-.24-1.8-.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path><path d="M8 4.1v7.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path></svg><span class="cb-credits-today">今日 <b >88.13</b></span><span class="cb-credits-sep" aria-hidden>·</span><span class="cb-credits-left">剩余 <b >120.4</b></span></button>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 11a5 5 0 0 1 10 0" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>3 轮 122 步</span></span>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><ellipse cx="8" cy="4" rx="5" ry="2" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>23.8M tok</span><span class="host-sep">·</span><span>缓存命中 99%</span></span>
+        <span class="host-pill"><span>24%</span></span>
+      </div>
+    </div>
+    <div class="cell">
+      <div class="cell-label">零余额</div>
+      <div class="dock-row">
+        <button type="button" class="cb-credits" data-dsh-codebuddy-credits="" data-busy="0" data-low="0" data-empty="1" title="CodeBuddy 积分
+账号：夜空～最亮的星
+剩余：0
+今日已用：0
+点击刷新（只读，不消耗积分）" aria-label="CodeBuddy 积分：0，今日已用 0"><svg class="cb-credits-icon" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false"><circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4"></circle><path d="M9.6 5.9c-.35-.42-.95-.68-1.6-.68-1.1 0-1.9.6-1.9 1.4 0 .72.6 1.06 1.65 1.3 1.05.24 1.7.5 1.7 1.32 0 .83-.85 1.35-2 1.35-.75 0-1.4-.24-1.8-.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path><path d="M8 4.1v7.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path></svg><span class="cb-credits-today">今日 <b >0</b></span><span class="cb-credits-sep" aria-hidden>·</span><span class="cb-credits-left">剩余 <b >0</b></span></button>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 11a5 5 0 0 1 10 0" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>3 轮 122 步</span></span>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><ellipse cx="8" cy="4" rx="5" ry="2" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>23.8M tok</span><span class="host-sep">·</span><span>缓存命中 99%</span></span>
+        <span class="host-pill"><span>24%</span></span>
+      </div>
+    </div>
+    <div class="cell">
+      <div class="cell-label">取数失败（错误原文照抄）</div>
+      <div class="dock-row">
+        <button type="button" class="cb-credits" data-dsh-codebuddy-credits="" data-error="1" title="CodeBuddy 积分读数失败：http 401 code 10001 token expired（点击重试）"><svg class="cb-credits-icon" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false"><circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4"></circle><path d="M9.6 5.9c-.35-.42-.95-.68-1.6-.68-1.1 0-1.9.6-1.9 1.4 0 .72.6 1.06 1.65 1.3 1.05.24 1.7.5 1.7 1.32 0 .83-.85 1.35-2 1.35-.75 0-1.4-.24-1.8-.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path><path d="M8 4.1v7.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"></path></svg><span class="cb-credits-left">积分 —</span></button>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 11a5 5 0 0 1 10 0" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>3 轮 122 步</span></span>
+        <span class="host-pill"><svg viewBox="0 0 16 16" width="14" height="14"><ellipse cx="8" cy="4" rx="5" ry="2" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>23.8M tok</span><span class="host-sep">·</span><span>缓存命中 99%</span></span>
+        <span class="host-pill"><span>24%</span></span>
+      </div>
+    </div>
+</body></html>

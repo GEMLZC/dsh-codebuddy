@@ -233,6 +233,71 @@ dsh plugin --profile <你的profile> add github:<owner>/dsh-codebuddy
 或该模型只有一个档位（此时只画静态标签，不画假滑块）。
 窄宽度（`≤ 560px`，与宿主同一阈值）会收起文字标签只留滑块。
 
+#### 输入框下方的积分读数（v1.1.9）
+
+输入框**下面**那一行（与宿主自己的「3 轮 122 步 · tok/s · 缓存命中 · 24%」同排）
+多了两颗读数：**今日已用** 与 **剩余总积分**。点一下立即刷新。
+
+```
+今日 190.73 · 剩余 5,759.9
+```
+
+**座位**：`conversation.composer.dock`（`order: -50`，排在宿主统计胶囊之前）。
+不是 `conversation.input.right` —— 那颗是工具栏（跟手操作），这颗是常驻读数，
+不该抢按钮的位置，也不该随输入框高度抖动。
+
+**数据从哪来**（两条都是**只读、不扣积分**的计费查询）：
+
+| 用途 | 接口 | 取值 |
+|---|---|---|
+| 剩余总积分 | `POST https://www.codebuddy.cn/billing/meter/get-user-resource-summary` | `data.TotalCredits` |
+| 今日已用 | `POST https://www.codebuddy.cn/billing/meter/get-user-request-usage` | `data.data[].credit` 求和 |
+| 今日请求数 | 同上 | `data.total` |
+
+三个坑，都踩过并写死在代码里：
+
+1. **路径没有 `/v2` 前缀**。`dsh-connect-workbuddy` 读余额走的是
+   `/v2/billing/meter/get-user-resource`，但 `-summary` 汇总口径在
+   `/billing/meter/get-user-resource-summary`；`/v2/...-summary` 实测 **404**。
+   两者不是同一条路由的两个版本。
+2. **不能自己对 `get-user-resource` 求和**。那个接口是**逐包**口径，且把已过期
+   （`Status: 3`）的包一起返回 —— 自己加会把作废积分算进余额。汇总接口直接给
+   `TotalCredits`，不必也不该自己加。
+3. **今日要从 `credit` 累加，不能拿 `total`（那是条数）**。一条请求是 `0.45` 这种
+   小数，按整数取整会把一天 `190.73` 显示成 `191`。
+
+**凭据**：按固定优先级逐个试 ——
+`$DSH_HOME/.codebuddy-cli-accounts.json` 的 activeId（CLI 登录态，也就是本机 DSH
+实际在调模型的账号）→ `workbuddy-vault/cn` → `workbuddy-vault/global`。
+**不按过期时间排序**：本机常同时有国内版与国际版两份登录态，那是**两个不同账号、
+两本独立的积分账**，按时间排会把另一本的余额显示成你的。
+
+遇到 401 才用 `refreshToken` 在**内存里**换一次并重试；不写回 vault ——
+那份文件同时被 `dsh-connect-workbuddy` 与 `dsh-model-meta` 读写，多写一次就多一次
+互相覆盖的机会，而这里只需要撑过这一次读数。
+
+**浏览器永远拿不到 token**：取凭据、换 token 全在 host 侧，
+前端只 fetch 一个聚合后的 JSON（`GET /_dsh/dsh-codebuddy/credits`）。
+
+**刷新策略**：成功 → 5 分钟；失败 → 45 秒重试（一次网络抖动不该让读数空一整个周期）。
+host 侧另有 60 秒缓存，挡住「连点」而不是「刷新」；`?force=1` 绕过缓存（点一下走这条）。
+
+**状态**：
+
+| 状态 | 表现 |
+|---|---|
+| 正常 | `今日 190.73 · 剩余 5,759.9`，千分位 + 最多两位小数（去尾零） |
+| 低余额（≤ 总量 20%） | 「剩余」数字转警告色 |
+| 零余额 | 「剩余」数字转错误色 |
+| 取数失败 | 变红、显示 `积分 —`，`title` 里是**上游错误原文**（不概括），点击重试 |
+| 极窄（≤ 640px） | 只留「剩余」，今日用量收进 `title` |
+
+> 用 `@media` 而**不是** `@container`：宿主 composer 的 `.dock` 没有声明
+> `container-type`，容器查询一条都不会命中 —— 写了等于没写。
+
+`__tests__`：`test/credits.test.mjs`（真组件渲染 + 四种状态）、
+`test/credits-route.test.mjs`（真 webServer 桩驱动 `apply()`，真的发一次 GET）。
+
 ---
 
 ## 数据与隐私

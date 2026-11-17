@@ -170,10 +170,11 @@ test('slider: 没有当前模型（current 为空）时不炸，也不给出可�
 
 // ── 注册面：必须挂在 right 槽且不改宿主模型座位 ────────────────────
 
-test('slider: 插件只注册 settings.section 与 conversation.input.right 两个槽', () => {
+test('slider: 插件注册 settings.section / conversation.input.right / conversation.composer.dock 三个槽', () => {
   const source = readFileSync(join(here, '..', 'lib', 'client.js'), 'utf8')
   const slots = [...source.matchAll(/\.(?:slots\.)?register\(\{\s*\n?\s*name:\s*"([^"]+)"/g)].map((m) => m[1])
-  assert.deepEqual(slots.sort(), ['conversation.input.right', 'settings.section'])
+  // composer.dock 是「输入框下方那一行」的积分读数（与拖动条是两个座位）。
+  assert.deepEqual(slots.sort(), ['conversation.composer.dock', 'conversation.input.right', 'settings.section'])
   // 绝不能顶掉宿主自己的模型选择器：那是 replaceRisk 最高的槽
   assert.ok(!source.includes('name: "conversation.input.model"'), '不能注册 conversation.input.model')
 })

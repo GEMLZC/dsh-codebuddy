@@ -71,12 +71,22 @@ function loadModule(react) {
   })
 }
 
-/** 通过 apply 的 register 调用捕获组件本体。 */
-function captureComponent(exports) {
+/**
+ * 通过 apply 的 register 调用捕获组件本体。
+ *
+ * 按**槽位名**取，不取「最后一次 register」：插件现在注册三个槽
+ * （settings.section / conversation.input.right / conversation.composer.dock），
+ * 取最后那个会拿到积分胶囊，于是这个文件会在「没能捕获 EffortControl」上失败 ——
+ * 那是测试自己的取样口径问题，不是拖动条坏了。
+ */
+function captureComponent(exports, slotName = 'conversation.input.right') {
   let captured = null
   const slots = {
     inject(_name, cb) { return cb() },
-    register(_opts, comp) { captured = comp; return () => {} },
+    register(opts, comp) {
+      if (opts && opts.name === slotName) captured = comp
+      return () => {}
+    },
   }
   const directory = {
     store: { subscribe: () => () => {}, getSnapshot: () => ({}) },

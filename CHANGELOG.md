@@ -3,6 +3,50 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.9] - 2026-11-11
+
+新增 **输入框下方那一行的积分读数**：`今日 190.73 · 剩余 5,759.9`。
+
+### 加了什么
+
+- 槽位 `conversation.composer.dock`（`order: -50`，排在宿主统计胶囊之前）。
+  与 `conversation.input.right` 的拖动条是两个座位：那颗是工具栏，这颗是常驻读数。
+- host 侧新模块 `lib/credits.js` + 只读路由 `GET /_dsh/dsh-codebuddy/credits`。
+- 设置页之外不再需要任何配置：有登录态就显示，没有就显示错误原文并可点击重试。
+
+### 两条接口的三个坑（都实测过）
+
+1. **路径没有 `/v2` 前缀**：`/billing/meter/get-user-resource-summary` 才是汇总口径，
+   `/v2/...-summary` 返回 404。名字相近的 `get-user-resource` 是另一条路由。
+2. **不能自己对 `get-user-resource` 求和**：它逐包返回、且把已过期（`Status: 3`）
+   的包一起给出，自己加会把作废积分算进余额。汇总接口直接给 `TotalCredits`。
+3. **今日必须累加 `credit`，不能拿 `total`**：`total` 是请求条数。
+   实测一天 291 条请求扣 166.34 积分。
+
+### 选了哪本账
+
+凭据按 **CLI → vault/cn → vault/global** 的固定顺序试，
+**不按 expiresAt 排序**。第一版按过期时间排，结果排到了国际版账号上 ——
+本机同时登着国内版与国际版（两个账号、两本独立的积分账），
+屏幕上于是显示着另一个人的余额。数字看着合理，但回答的是错误的那个人。
+
+401 才刷新，且只在**内存里**换 token 不写回 vault：那份文件同时被
+`dsh-connect-workbuddy` 与 `dsh-model-meta` 读写。
+
+### 修的两处
+
+- CSS 里两条 `@container` 改成 `@media`：宿主 `.dock` 没有 `container-type`，
+  容器查询一条都不会命中。
+- 胶囊补 `flex: 0 1 auto; min-width: 0`：nowrap 文本会把 min-content 顶成硬宽度，
+  在窄行里让 `justify-content:center` 的 dock **两边一起溢出**（实测左溢 65px）。
+
+### 测试
+
+- `test/credits.test.mjs`：真组件渲染 + 正常/低余额/零/失败四态。
+- `test/credits-route.test.mjs`：真 webServer 桩驱动 `apply()`，真的发一次 GET。
+- `test/slider.test.mjs`、`test/render-effort.test.mjs`：槽位数与「按名取组件」同步更新
+  （原来取「最后一次 register」，加了第二个槽之后会拿到积分胶囊）。
+
 ## [1.1.8] - 2026-11-06
 
 修 **拖动条在界面上完全不出现**（前几版都白改）。
