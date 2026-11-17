@@ -3,6 +3,72 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.10] - 2026-11-17
+
+修 **「重启后模型列表变回原样」** —— 用户报的就是这一条。
+
+### 现象
+
+在设置页点过「获取模型」，官方新上的模型（Hy4 系列、MiMo、Kimi K3.1、GLM-5.0/4.x…）
+立刻出现在选择器里；**重启 DSH 后全部消失**，只剩 `cordis.patch.yml` 里手抄的 28 条。
+每次重启都要再点一次「获取模型」，而每点一次都是真金白银的探测动作。
+
+### 根因
+
+`discoveredModels`（探测命中）/ `absentModels`（确认下线）是**纯内存 Map**，
+作者注释里写得很清楚：「生命周期与 discoverCache 相同（进程重启即失效）」。
+官方清单 `GET /v3/config` 明明 1 次请求 0 计费、字段还比手抄的准，结果却只活一个进程。
+
+### 修法
+
+- **落盘**：成功探测 / 官方清单的结果经 `persistCatalog()` 写到
+  `$DSH_HOME/codebuddy-models.json`（原子写：临时文件 + rename）。
+- **回灌**：`apply()` 启动时 `hydratePersistedCatalog(readConfig().baseURL)`，
+  端点一致才装进 `discoveredModels`，之后的 `listModels()` 自然就带上它们。
+- **清理**：改密钥（换账号）、清密钥、点「清缓存」都会删掉该文件 ——
+  旧账号的目录不能当成新账号的能力。
+
+三条边界（都有测试守着）：
+
+1. 落盘**只含** `baseURL` + 模型元数据，**不含密钥指纹**。
+   `discoverCache` 那种 `baseURL|sha256(key)[:16]` 的键绝不能落盘。
+2. `baseURL` 不匹配就不回灌，换端点不会把旧端点的模型并进来（否则选中即 400）。
+3. 只写 `id/name/contextWindow/maxTokens/inputModalities`，与 `listModels()` 消费的字段一一对应。
+
+没有加 `Config` schema —— 那会牵动 profile 的 lockfile，且我们需要的只是「重启后还在」，
+不是「进 DSH settings 命名空间」。所以它不参与配置热更新：要强刷就点「获取模型」。
+
+### 顺带修掉的两个语义 bug（都是「静态清单压过实测值」）
+
+**① `mergeModels()` 的同 id 优先级反了。** 注释写「清单是权威的，它同时给出有什么和没有什么」，
+代码却是「同 id 以配置清单为准」。拿网关实时清单对照，后果是：
+
+- 10 个模型的 `maxTokens` 被手抄值压低，例如 `glm-5.3-flash` 静态 8192、网关 131072
+  （少 123k），`deepseek-v4-pro` 静态 32768、网关 128000（少 95k）—— 长回答被硬截断，
+  用户还得发「继续」；
+- 图片能力判断错 2 个：`glm-5.2` 静态声明 `image` 而网关 `supportsImages=false`，
+  `minimax-m3-pay` 反过来。
+
+改成**逐字段**取并集：有实测值用实测值，缺字段（老探测只记了 id）才回落到静态声明。
+逐字段而非整条覆盖，是因为整条覆盖会把好的 `contextWindow` 冲成 `undefined`。
+
+**② `stream()` 判断「能不能读图」时查的是 `cfg.models`（纯静态）。**
+只存在于探测/回灌目录里的模型在 `cfg.models` 里根本找不到 →
+`modelAcceptsImages(undefined) = false` → 宿主已按 `listModels()` 说「这个模型能看图」
+并保留了图片，适配器这边却把它当纯文本，图片**静默丢弃**。
+现在查 `this.options.models()`（合并后目录），与 GUI 显示一致。
+
+### 测试
+
+- `test/persist-catalog.test.mjs`（新增 5 条）：落盘字段白名单、指纹不外泄、
+  端点一致才回灌、端点不符拒绝回灌、损坏/缺失/版本不符一律不抛、
+  `clearPersistedCatalog` 幂等。
+- `test/index.test.mjs`：把「同 id 以配置清单为准」的断言改成「探测值优先」，
+  并补一条逐字段合并的用例（覆盖值 / 缺字段保留配置值 / 模态取实测值）。
+
+> 注：`test/cordis-replay.test.mjs` 里那条「漏声明 remote.session 必须复现注册不上」
+> 在本机 **修复前就是红的**（`git stash` 验证过），与本次改动无关，未动它。
+
 ## [1.1.9] - 2026-11-11
 
 新增 **输入框下方那一行的积分读数**：`今日 190.73 · 剩余 5,759.9`。

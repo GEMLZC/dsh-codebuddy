@@ -810,11 +810,41 @@ test('mergeModels: 探测命中的模型必须进入 listModels 的目录', () =
   assert.ok(merged.some((m) => m.id === 'brand-new-model'))
   assert.equal(merged[0].id, 'auto', '配置清单在前，顺序稳定')
 
-  // 同 id 以配置清单为准，不得重复
+  // 同 id 不得重复；元数据以**探测结果**为准（静态清单是人手抄的，会过时）
   rememberDiscovered(['auto'], new Map())
   const dedup = mergeModels(configured)
   assert.equal(dedup.filter((m) => m.id === 'auto').length, 1, '同 id 不得重复')
-  assert.equal(dedup.find((m) => m.id === 'auto').contextWindow, 1000)
+  // 探测条目没有元数据（known 为空）→ rememberDiscovered 用兜底值 1000000/8192，
+  // 这正是「实测值优先」的表现：配置的 1000/10 是猜测，探测值是真值。
+  assert.equal(dedup.find((m) => m.id === 'auto').contextWindow, 1000000,
+    '同 id 时探测结果的元数据必须覆盖配置清单（否则官方上调的窗口/输出上限永远生效不了）')
+  discoveredModels.clear()
+})
+
+test('mergeModels: 探测值覆盖配置值，但探测缺字段时保留配置值（逐字段合并）', () => {
+  discoveredModels.clear()
+  rememberAbsent([])
+  const configured = [{ id: 'glm-x', name: 'GLM X (yml)', contextWindow: 200000, maxTokens: 8192 }]
+
+  // 情形①：探测给出更准的 maxTokens → 必须覆盖
+  //   （真实回归：glm-5.3-flash 静态 8192、网关 131072，少 123k，长回答被硬截断）
+  discoveredModels.set('glm-x', { id: 'glm-x', name: 'GLM-5.3-Flash', contextWindow: 1000000, maxTokens: 131072 })
+  const upgraded = mergeModels(configured)[0]
+  assert.equal(upgraded.maxTokens, 131072, '探测给出的更大 maxTokens 必须生效')
+  assert.equal(upgraded.contextWindow, 1000000, '探测给出的 contextWindow 必须生效')
+  assert.equal(upgraded.name, 'GLM-5.3-Flash', '网关的名字比手抄的好看，取探测值')
+
+  // 情形②：探测条目缺字段（老探测只记了 id）→ 不得把配置值冲成 undefined
+  discoveredModels.set('glm-x', { id: 'glm-x' })
+  const partial = mergeModels(configured)[0]
+  assert.equal(partial.maxTokens, 8192, '探测缺 maxTokens 时必须保留配置值，不能变 undefined')
+  assert.equal(partial.contextWindow, 200000, '探测缺 contextWindow 时必须保留配置值')
+  assert.equal(partial.name, 'GLM X (yml)', '探测缺 name 时必须保留配置名')
+
+  // 情形③：探测声明了 image 而配置没写 → 取探测值（反之亦然，都取真实能力）
+  discoveredModels.set('glm-x', { id: 'glm-x', inputModalities: ['text', 'image'] })
+  assert.deepEqual(mergeModels(configured)[0].inputModalities, ['text', 'image'])
+
   discoveredModels.clear()
 })
 
